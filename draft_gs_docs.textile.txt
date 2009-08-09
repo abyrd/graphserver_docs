@@ -1,0 +1,318 @@
+Current website: http://github.com/bmander/graphserver/tree/master
+Old website: http://graphserver.sourceforge.net/
+
+
+h1. 0) OVERVIEW
+
+_From README in the Graphserver source tree_
+
+Graphserver provides a C implementation of Djikstra's shortest path algorithm. This algorithm can be used to solve any number of problems, including street routing, transit routing, network analysis, etc.
+
+The core graphserver library has Python bindings (and deprecated Ruby bindings), which provide easy construction, storage, and analysis of graph objects.  There are also a handful of tools designed to work with Open Street Map data and GTFS transit data.
+
+_Related projects: prender, transitfeed, osmosis_
+
+
+h1. 1) INTRODUCTION
+
+_Mashup of posts from Brandon Martin Anderson (BMA) and Nino Walker (NW) at:_
+_http://groups.google.com/group/transit-developers/browse_thread/thread/1c74f7949b7caba3_
+
+It's important to emphasize that Graphserver is not a software _suite_. It is a software _component_. It only does one thing, which is sit in memory, catch route requests given origin and destination vertex IDs, and then return shortest paths. Most importantly, It is not a spatial database. In any non-trivial installation Graphserver would need to be used with a spatially-enabled database in order to perform a location to vertex ID lookup... PostGIS provides such functionality for PostgreSQL. (BMA)  
+
+Graphserver is capable of incorporating data that can be represented as a network of vertices and edges.  If you have an existing database streets (a shapefile for example), you can write an adapter that translates it into a graph, and then route on it. The API is extensible, so that you can model the edge costs of any kind of network - roads, transit, social, pedestrian, etc... The elements of the graph can be as simple or rich as you need. 
+
+Graphserver has no implicit concept of space - it deals strictly in Nodes and Edges.  So anything you can deconstruct into a connected graph of nodes and edges can be "routed" on... social graphs, road / path networks, transit schedules, bars (shortest-path bar hopping), and, theoretically, all of the above in any combination ;) (NW)
+ 
+The graph edges contain function pointers which point to arbitrary functions that take the state of the edge's origin vertex and return the state of the edge's destination vertex. This state is a set of properties and a weight. A simple graph representing a spatial network with one edge might look like: 
+
+A -- (street with length 2 miles) --> B. 
+
+Let's say that we start out with a state of S0 := {travel_speed:2 mph, time:1 PM, weight;0}. The edge function takes S0 and returns S1 := {travel_speed:2 mph, time:2 PM, weight:3600}. 
+
+A network of similar edges can be constructed which represent an entire city, and a shortest path tree is grown which minimizes the weight variable of the state. 
+
+The advantage of this approach is its flexibility. You can define edge functions which represent transit schedules, for example. You can define edge functions which perform primitive operations on the travel state - one edge function called Wait, which looks like {deadline: 4 PM} simply sets the time of the state to the deadline and increments the weight by the difference between time at S0 and S1. I've defined a "Friendship" edge function and used it to find the shortest path between friends in a social network. With this sort of flexibility the question isn't how one could possibly describe a transit network - the question is _which way_ do you describe a scheduled transit network as a graph. That actually ends up being the biggest problem. (BMA)   
+
+One way to build a time-aware graph for transit routing: expand each stop with N stop-times into N nodes, and then have directed edges advancing in time.  To calculate a route from/to a stop, you calculate from a specific station-stop-time node to another station-stop-time node, via other stop-time nodes.  Devil is in the details, but that's the gist. 
+
+BTW, Graphserver has an example GTFS loader for... building GTFS schedule based space-time graphs!  Dig around in the examples section of the source tree, there's a wealth of cool stuff. (NW)  
+
+
+h1. 2) INSTALLATION
+
+First, to clone the repository:
+
+bc. $ cd ~/src
+$ git clone git://github.com/bmander/graphserver.git 
+
+If you are behind a firewall, the Git port may be blocked. Replace git:// with http:// and it might work.
+
+See the README in the root of the source tree for current installation instructions.
+
+For a typical installation (using Python setuptools, automatically compiles the C library):
+
+bc. $ cd graphserver/pygs
+$ sudo python setup.py install
+
+h1. 3) EXAMPLES
+
+h2. 3.1) PUBLIC TRANSIT DATA ALONE
+
+Download a GTFS feed. Here I have used Tri-Met's data (Portland, Oregon).
+Convert the GTFS text files into a SQLite database:
+
+<code>$ python /path/to/graphserver/pygs/graphserver/ext/gtfs/process_gtfs.py trimet_13sep2009.gtfs.zip trimet_13sep2009.gtfsdb
+</code>
+
+Yields 55MB GTFS DB.
+Next, load the GTFS SQLite database into a Graphserver Graph, then export this Graph to another SQLite file:
+
+<code>$ python /path/to/graphserver/pygs/graphserver/compiler/compile_graph.py -l -g trimet_13sep2009.gtfsdb trimet_13sep2009_linked.gsdb</code>
+
+Compile_graph can combine transit data with Open Street Map data to model multimodal travel. Here, we are using only transit data, so some stops that are quite close might not be accessible from one another by walking, since there are no streets in the graph. The -l (link) option will make links between close stations, but for the moment you must modify the code to get good results.
+
+Observations on a particular machine: Python uses ~900MB vmem when GTFSDB is entirely loaded into a graph, ~930MB during dump process.
+
+Yields 283MB Graphserver DB with approximately: 5 230 trip bundles, 419 000 vertices, and 1 667 000 edges.
+
+bc.. #! /usr/bin/python
+
+# Incarnate the graph database created earlier
+# with the graph compiler tools
+from graphserver.core import Graph, State, Link
+from graphserver.graphdb import GraphDatabase
+gdb = GraphDatabase('trimet_13sep2009_linked.gsdb')
+g = gdb.incarnate()
+
+# Board-alight graphs contain many vertices which do not
+# correspond to stations – print a list of only the stations
+# Is there a better way to do this?
+[v.label for v in g.vertices if v.label[0:3] == 'sta']
+
+# Store a particular moment as seconds since the epoch
+t0 = 1253730000
+# Check it in human-readable form.
+# Wed Sep 23 20:20:00 2009 (European time)
+import time
+time.ctime(t0)
+
+# Tri-Met stations:
+# 9979  Beaverton Transit Center Northbound
+# 8334  Pioneer Square MAX Eastbound
+# 3451  North Lombard and Mississippi (1000 ft east of MAX Yellow line)
+# 10579 Portland International Airport
+# 430   SE Belmont and 42nd Westbound
+# Example using Pioneer Square to Airport:
+psquare = 'sta-8334'
+airport = 'sta-10579'
+spt = g.shortest_path_tree( psquare, airport, State(1, t0))
+spt.get_vertex(psquare).outgoing
+spt.get_vertex(airport).incoming
+vertices, edges = spt.path(airport)
+[v.label for v in vertices]
+[e.payload.to_xml() for e in edges]
+vertices[-1].payload.weight
+(vertices[-1].payload.time - t0) / 60
+# Clean up, Graphs can be big.
+spt.destroy()
+
+# Get a full path tree from pioneer square
+# and print the times for the shortest path to every other stop
+spt = g.shortest_path_tree( psquare,  None, State(1, t0))
+vlabels = [v.label for v in g.vertices if v.label[0:3] == 'sta']
+for vl in vlabels :
+    print vl, (spt.get_vertex(vl).payload.time - t0) / 60
+
+# Improvised stress and speed test.
+# Find a full shortest path tree from every station
+# and time the calculations
+ti = time.time()
+for vl in vlabels :
+    tn = time.time()
+    spt = g.shortest_path_tree(vl, None, State(1, t0))
+    # About 1.8 seconds per tree for PDX linked transit graph
+    print vl, time.time() - tn
+    # Clean up and avoid massive memory leak
+    spt.destroy() 
+
+# Gives about 2 seconds per full path tree
+print (time.time() - ti) / len(vlabels)  
+
+# Clean up
+g.destroy()
+
+h1. 4) C API REFERENCE
+
+The Graphserver library is object-oriented C. All function names are prefixed by a letter or letters indicating the type of object they operate on (e.g. g for Graphs, e for Edges). All functions except xNew have an explicit first 'this' argument, which is a reference to the object the method operates on. Thus it is straightforward to make wrappers for this C library in languages like Python.
+
+
+h2. 4.1) GRAPH FUNCTIONS
+
+pre.. Graph* 
+gNew() 
+Allocates a new graph, with an empty hashtable of vertices.
+Returns a pointer to the new Graph.
+
+void
+gDestroy( Graph* this, int kill_vertex_payloads, int kill_edge_payloads ) 
+Deallocates a graph, and optionally its vertex and edge payloads.
+Returns nothing.
+
+Vertex* 
+gAddVertex( Graph* this, char *label ) 
+Creates a new vertex with the specified label, unless one already exists.
+Returns a boolean true if the vertex already existed, false otherwise.
+
+Vertex* 
+gGetVertex( Graph* this, char *label ) 
+Returns a reference to the vertex with the specified label.
+
+Edge* 
+gAddEdge( Graph* this, char *from, char *to, EdgePayload *payload )
+Creates a new directed edge between two vertices, with the given payload.
+Returns a reference to the new edge, or NULL if the from and to vertices are identical.
+
+Edge*
+gAddEdgeGeom( Graph* this, char *from, char *to, EdgePayload *payload, char * datageom ) 
+Same as gAddEdge but with the specified geometry.
+
+Vertex**
+gVertices( Graph* this, long* num_vertices )
+Fetches a list of all vertices in the graph.
+Returns an array of vertex pointers.
+The size of the returned array is stored in 'num_vertices'.
+
+State*
+gShortestPath( Graph* this, char *from, char *to, State* init_state, int direction, long *size )
+Finds a shortest path from one vertex to another, given an initial state.
+Checks that the vertices exist before proceeding.
+Direction := TRUE does a foreward search, otherwise does a retro search.
+Internally, finds a minimum spanning tree with gShortestPathTree().
+Returns an array of states along the path, or NULL if the destination vertex is never reached (i.e. it is not in the SPT).
+The size of the result array is stored in the parameter 'size'.
+
+long
+gSize( Graph* this )
+Returns the number of vertices in the graph.
+
+h2. 4.1 bis) GRAPH ROUTER FUNCTIONS (in router.c)
+
+pre.. Graph*
+gShortestPathTree( Graph* this, char *from, char *to, State* init_state, WalkOptions* options, long maxtime )
+ Performs Dijkstra's algorithm to find a shortest path tree.
+ Creates a new shortest path tree Graph.
+ Passing a 'to' vertex label that matches none of the vertices in the graph (e.g. NULL) will create a full path tree to all vertices.
+ Returns a reference to the shortest path tree graph, or NULL if the 'from' vertex does not exist in this graph.
+
+Graph*	
+gShortestPathTreeRetro( Graph* this, char *from, char *to, State* init_state, WalkOptions* options, long mintime ) 
+Like gShortestPathTree but inverts origin and target, searching 'backwards' (e.g. 'arrive before' instead of 'leave after' in transit trip planning).
+
+h2. 4.2) VERTEX FUNCTIONS
+
+pre.. Vertex *
+vNew( char* label ) 
+Allocates and initializes a new Vertex, with empty incoming and outgoing edge lists and a NULL payload.
+The specified label will be a unique identifier for this Vertex (a hashtable key).
+Returns a pointer to the new Vertex.
+
+void
+vDestroy(Vertex *this, int free_vertex_payload, int free_edge_payloads)
+Deallocates a vertex object, and optionally its vertex payload (state object), and edge payloads (by calling the eDestroy function).
+
+Edge*
+vLink(Vertex* this, Vertex* to, EdgePayload* payload)
+Creates a new edge from 'this' Vertex to another specified Vertex, with the specified payload.
+Internally, this edge is stashed in a list node and added to 'this' Vertex's outgoting edge list.
+Returns a pointer to the new Edge.
+
+Edge*
+vLinkGeom(Vertex* this, Vertex* to, EdgePayload* payload, char* datageom)
+Like vLink but with geometry data.
+
+Edge*
+vSetParent( Vertex* this, Vertex* parent, EdgePayload* payload )
+Removes all of this Vertex's incoming edges. 
+Reattaches it to the parent Vertex with a single incoming edge carrying the given payload.
+Returns a reference to the new Edge.
+
+Edge*
+vSetParentGeom( Vertex* this, Vertex* parent, EdgePayload* payload, char * geomdata )
+Same as vSetParent, but with a geometry string.
+
+ListNode*
+vGetOutgoingEdgeList( Vertex* this ) 
+Returns a linked list of the outgoing edges from this Vertex.
+
+ListNode*
+vGetIncomingEdgeList( Vertex* this )
+Returns a linked list of the incoming edges to this Vertex.
+
+void
+vRemoveOutEdgeRef( Vertex* this, Edge* todie ) 
+Removes the specified Edge from this Vertex's outgoing edge list.
+
+void
+vRemoveInEdgeRef( Vertex* this, Edge* todie )
+Removes the specified Edge from this Vertex's incoming edge list.
+
+char*
+vGetLabel( Vertex* this ) 
+Returns the label of this Vertex.
+
+int
+vDegreeOut( Vertex* this ) 
+Returns the number of outgoing edges from this Vertex.
+
+int
+vDegreeIn( Vertex* this ) 
+Returns the number of incoming edges to this Vertex.
+
+State*
+vPayload( Vertex* this ) 
+Returns the payload (State) of this Vertex.
+
+h2. 4.3) EDGE FUNCTIONS
+
+pre.. Edge*
+eNew(Vertex* from, Vertex* to, EdgePayload* payload)
+Allocates a new Edge object between the given from and to Vertices, carrying the specified EdgePayload.
+Its geometry is set to NULL.
+Returns a reference to the new Edge.
+
+Edge*
+eNewGeom(Vertex* from, Vertex* to, EdgePayload* payload,char * datageom)
+Same as eNew but stores a geometry string.
+
+void
+eDestroy(Edge *this, int destroy_payload) 
+Deallocates this Edge, and also deallocates its payload if destroy_payload is TRUE.
+
+State*
+eWalk(Edge *this, State* params) 
+Calls the walk function for ths Edge's EdgePayload.
+The specific function is determined by the EdgePayload's type - it can even be a custom function.
+Essentially, transitions from an initial State to another, allowing Graphs with mixed edge types.
+Returns the final State.
+
+State*
+eWalkBack(Edge *this, State* params)
+Like eWalk but goes backwards (i.e. retro search)
+
+Edge*
+eGeom(Edge* this,char * datageom) 
+Creates a new geometry and stores it in this Edge.
+Returns a reference to this Edge.
+
+Vertex*
+eGetFrom(Edge *this) 
+Returns the Vertex that this Edge comes from.
+
+Vertex*
+eGetTo(Edge *this) 
+Returns the Vertex that this Edge leads to.
+
+EdgePayload*
+eGetPayload(Edge *this) 
+Returns a reference to this Edge's EdgePayload.

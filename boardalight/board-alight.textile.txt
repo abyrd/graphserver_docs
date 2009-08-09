@@ -1,0 +1,79 @@
+_adapted from a document by Brandon Martin-Anderson at:_
+_http://docs.google.com/View?docID=0AU5Z7AyXC8c7ZHByMzRkZl8xOHo3N2twaGR4_
+
+p. Modifications :
+
+p. andrewbyrd (8 Aug 2009) :
+* Images cleaned up and resized
+* References to colors updated in text
+* Incorrect weights updated on diagram A, and corresponding erratum in text removed
+
+p. andrewbyrd (9 Aug 2009) :
+* Moved image hosting to a repository on Github
+
+h1. Board / Alight / Crossing Transit Graphs
+
+p. There exist stations "A", "B", "C". The early train, "1", departs "A" at 0 and takes 10 minutes. The late train "2" departs "A" at 10, and passes "B" at 20, to arrive at "C" at 30. Here's a straightforward representation of this transit system as a graph, along with its shortest path tree from vertex "A".
+
+<img src="http://github.com/andrewbyrd/graphserver_docs/raw/master/boardalight/board-alight-1.jpg"><br>
+<img src="http://github.com/andrewbyrd/graphserver_docs/raw/master/boardalight/board-alight-2.jpg"><br>
+
+p. The shortest path tree finds the soonest arrival at C, but the path involves taking the first departure from A, waiting at B, and then taking a second train to C, whereas one could simply take the second train from A to arrive at C without transferring at B.
+
+p. A graph to represent this transit system in a way that reflects the cost of transferring is shown below. It consists of three types of edges. Black "Crossing" edges model riding a vehicle between two stations. Orange "Alight" edges represent alighting a vehicle, and blue "Board" edges model waiting for and boarding a vehicle. The shortest path tree from A is shown below.
+
+<img src="http://github.com/andrewbyrd/graphserver_docs/raw/master/boardalight/board-alight-3.jpg"><br>
+<img src="http://github.com/andrewbyrd/graphserver_docs/raw/master/boardalight/board-alight-4.jpg"><br>
+
+p. If the cost of a crossing is 10, the cost of a boarding is the wait plus a penalty of 0.1, and the cost of an alighting is 0.1, then the sum cost of the path from A to B via an unnecessary transfer is:
+
+p. wait + board + crossing + alight + wait + board + crossing + alight = 0 + 0.1 + 10 + 0.1 + 0.1 + 10 + 0.1 = 30.4.
+
+p. A route without a transfer is:
+
+p. wait + board + crossing + crossing + alight = 10 + 0.1 + 10 + 10 + 0.1 = 30.2.
+
+p. The path without the transfer is quantitatively the shorter path, and so can be found automatically.
+
+p. This type of schedule representation can be extended to larger schedules. Here's a similar graph, representing two different lines, each with two trips. Line "1" runs from A to B, departing at 0 and 20. Line "2" runs from A to B to C, departing at 10 and 30. The shortest path tree with respect to "A" at time 0 is illustrated below.
+
+<img src="http://github.com/andrewbyrd/graphserver_docs/raw/master/boardalight/board-alight-5.jpg"><br>
+<img src="http://github.com/andrewbyrd/graphserver_docs/raw/master/boardalight/board-alight-6.jpg"><br>
+
+p. The shortest path from A to B involves taking Line 1 Trip 1 from A to B. The shortest path from A to C involves taking Line 2 Trip 1 from A to B to C. Things are working as they should.
+
+p. The notable thing about this shortest path tree is that several transfers are never part of the solution. Next, the graph is rearranged with "link" edges (which have the property of simply coping the state from the edge origin to edge destination, and have a weight of 0) to bundle crossings from the same line/route together. In the corresponding shortest path tree we see that if crossings are bundled by line/route, only the first departure after the origin state's time is ever part of the solution.<br>
+
+<img src="http://github.com/andrewbyrd/graphserver_docs/raw/master/boardalight/board-alight-7.jpg"><br>
+<img src="http://github.com/andrewbyrd/graphserver_docs/raw/master/boardalight/board-alight-8.jpg"><br>
+
+p. If crossings after the first crossing in a line are never used in the solution, we should find some way to remove them from the shortest path search space. One way to do that is to make the "board" edge slightly more sophisticated. The board edge contains a schedule, and advances the destination state time to the first time after the origin time, and advances the destination state weight accordingly. The shortest path tree works for this graph is created with respect to vertex "A" at time 0.
+
+<img src="http://github.com/andrewbyrd/graphserver_docs/raw/master/boardalight/board-alight-9.jpg"><br>
+<img src="http://github.com/andrewbyrd/graphserver_docs/raw/master/boardalight/board-alight-A2.jpg"><br>
+
+p. The shortest path to B is via line 1, arriving at 10. The shortest path to C is via line 2, arriving at 30 with no transfers.
+
+<img src="http://github.com/andrewbyrd/graphserver_docs/raw/master/boardalight/board-alight-B.jpg"><br>
+
+p. Here's another shortest path tree, with the origin at vertex "A" departing at 10. The shortest path to B is via line 2 arriving 10 minutes after departure, and C arriving 20 minutes after departure.
+
+p. The following is a slightly more involved example, demonstrating the suitability of this approach to a more complex schedule. This schedule has three lines:
+
+* Line 1: A -&gt; B -&gt; C, departures at 0 and 20
+* Line 2: B -&gt; C -&gt; D, departures at 20 and 50
+* Line 3: B -&gt; C -&gt; D -&gt; E, departures at 40 and 60
+
+<img src="http://github.com/andrewbyrd/graphserver_docs/raw/master/boardalight/board-alight-C.jpg"><br>
+<img src="http://github.com/andrewbyrd/graphserver_docs/raw/master/boardalight/board-alight-D.jpg"><br>
+<img src="http://github.com/andrewbyrd/graphserver_docs/raw/master/boardalight/board-alight-E.jpg"><br>
+<img src="http://github.com/andrewbyrd/graphserver_docs/raw/master/boardalight/board-alight-F.jpg"><br>
+
+p. Both the expanded crossing and crossing bundle return the same routes.
+* A to B via 1.1
+* A to C via 1.1
+* A to D via 1.1, transfer at B to 2.1
+* A to E via 1.1, transfer at B to 3.1
+
+p. So, it seems to work pretty well.
+
